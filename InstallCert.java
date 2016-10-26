@@ -39,6 +39,8 @@
 
 import javax.net.ssl.*;
 import java.io.*;
+import java.util.List;
+import java.util.ArrayList;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.cert.CertificateException;
@@ -51,18 +53,40 @@ import java.security.cert.X509Certificate;
 public class InstallCert {
 
     public static void main(String[] args) throws Exception {
+        List<String> argsList = new ArrayList<String>();
+        List<String> argsOpt = new ArrayList<String>();
         String host;
         int port;
         char[] passphrase;
-        if ((args.length == 1) || (args.length == 2)) {
-            String[] c = args[0].split(":");
+        Boolean isQuiet = false;
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i].charAt(0)) {
+                case '-':
+                    if (args[i].length() < 2)
+                        throw new IllegalArgumentException("Not a valid argument: " + args[i]);
+                    else
+                        argsOpt.add(args[i]);
+                    break;
+                default:
+                    argsList.add(args[i]);
+                    break;
+
+            }
+        }
+
+        if ((argsList.size() == 1) || (argsList.size() == 2)) {
+            String[] c = argsList.get(0).split(":");
             host = c[0];
             port = (c.length == 1) ? 443 : Integer.parseInt(c[1]);
-            String p = (args.length == 1) ? "changeit" : args[1];
+            String p = (argsList.size() == 1) ? "changeit" : argsList.get(1);
             passphrase = p.toCharArray();
         } else {
             System.out.println("Usage: java InstallCert <host>[:port] [passphrase]");
             return;
+        }
+        for (String x : argsOpt) {
+            if (x.equals("-q") || x.equals("--quiet"))
+                isQuiet = true;
         }
 
         File file = new File("jssecacerts");
@@ -92,6 +116,7 @@ public class InstallCert {
 
         System.out.println("Opening connection to " + host + ":" + port + "...");
         SSLSocket socket = (SSLSocket) factory.createSocket(host, port);
+        Boolean hasError = false;
         socket.setSoTimeout(10000);
         try {
             System.out.println("Starting SSL handshake...");
@@ -101,6 +126,7 @@ public class InstallCert {
             System.out.println("No errors, certificate is already trusted");
         } catch (SSLException e) {
             System.out.println();
+            hasError = true;
             e.printStackTrace(System.out);
         }
 
@@ -109,9 +135,6 @@ public class InstallCert {
             System.out.println("Could not obtain server certificate chain");
             return;
         }
-
-        BufferedReader reader =
-                new BufferedReader(new InputStreamReader(System.in));
 
         System.out.println();
         System.out.println("Server sent " + chain.length + " certificate(s):");
@@ -130,30 +153,76 @@ public class InstallCert {
             System.out.println();
         }
 
-        System.out.println("Enter certificate to add to trusted keystore or 'q' to quit: [1]");
-        String line = reader.readLine().trim();
-        int k;
-        try {
-            k = (line.length() == 0) ? 0 : Integer.parseInt(line) - 1;
-        } catch (NumberFormatException e) {
-            System.out.println("KeyStore not changed");
-            return;
+        if (!isQuiet) {
+            BufferedReader reader =
+                    new BufferedReader(new InputStreamReader(System.in));
+
+            System.out.println("Enter certificate to add to trusted keystore or 'q' to quit: [1]");
+            String line = reader.readLine().trim();
+            int k;
+            try {
+                k = (line.length() == 0) ? 0 : Integer.parseInt(line) - 1;
+            } catch (NumberFormatException e) {
+                System.out.println("KeyStore not changed");
+                return;
+            }
+
+            X509Certificate cert = chain[k];
+            String alias = host + "-" + (k + 1);
+            ks.setCertificateEntry(alias, cert);
+
+            OutputStream out = new FileOutputStream("jssecacerts");
+            ks.store(out, passphrase);
+            out.close();
+
+            System.out.println();
+            System.out.println(cert);
+            System.out.println();
+            System.out.println
+                    ("Added certificate to keystore 'jssecacerts' using alias '"
+                            + alias + "'");
+
+        } else { // generate new cert if having errors in silent mode
+            if (hasError) {
+                X509Certificate cert = chain[0];
+                String alias = host + "-1";
+                ks.setCertificateEntry(alias, cert);
+                
+                OutputStream out = new FileOutputStream("jssecacerts");
+                ks.store(out, passphrase);
+                out.close();
+
+                System.out.println();
+                System.out.println(cert);
+                System.out.println();
+                System.out.println
+                        ("Added certificate to keystore 'jssecacerts' using alias '"
+                                + alias + "'");
+                File src = new File("jssecacerts");
+                char SEP = File.separatorChar;
+                File dir = new File(System.getProperty("java.home") + SEP
+                        + "lib" + SEP + "security");
+                File desCertFile = new File(dir, "jssecacerts");
+                InputStream input = null;
+                OutputStream output = null;
+                try {
+                    input = new FileInputStream(src);
+                    output = new FileOutputStream(desCertFile);
+                    byte[] buff = new byte[1024];
+                    int bytesRead;
+                    while ((bytesRead = input.read(buff)) > 0) {
+                        output.write(buff, 0, bytesRead);
+                    }
+                } finally {
+                    input.close();
+                    output.close();
+                }
+                System.out.println();
+                System.out.println
+                        ("Copied certificate 'jssecacerts' to "
+                                + dir.getAbsolutePath());                 
+            }       
         }
-
-        X509Certificate cert = chain[k];
-        String alias = host + "-" + (k + 1);
-        ks.setCertificateEntry(alias, cert);
-
-        OutputStream out = new FileOutputStream("jssecacerts");
-        ks.store(out, passphrase);
-        out.close();
-
-        System.out.println();
-        System.out.println(cert);
-        System.out.println();
-        System.out.println
-                ("Added certificate to keystore 'jssecacerts' using alias '"
-                        + alias + "'");
     }
 
     private static final char[] HEXDIGITS = "0123456789abcdef".toCharArray();
